@@ -1,0 +1,41 @@
+# httpbin — mock backend for testing APISIX routes
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: httpbin
+  namespace: apisix
+  labels:
+    app: httpbin
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: httpbin
+  template:
+    metadata:
+      labels:
+        app: httpbin
+    spec:
+      containers:
+        - name: httpbin
+          image: kennethreitz/httpbin:latest
+          ports:
+            - containerPort: 80
+          readinessProbe:
+            httpGet:
+              path: /get
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: httpbin
+  namespace: apisix
+spec:
+  selector:
+    app: httpbin
+  ports:
+    - port: 80
+      targetPort: 80

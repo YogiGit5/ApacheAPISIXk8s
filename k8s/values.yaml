@@ -1,0 +1,67 @@
+# APISIX Helm chart values — dev/demo on K8s
+# Chart: https://github.com/apache/apisix-helm-chart
+
+apisix:
+  image:
+    repository: apache/apisix
+    tag: 3.9.1-debian
+
+  replicaCount: 1
+
+  # Plugins to load (keep minimal for dev)
+  plugins:
+    - cors
+    - request-id
+    - limit-count
+    - limit-conn
+    - proxy-rewrite
+    - prometheus
+    # - openid-connect    # enable when Keycloak is ready
+
+  pluginAttrs:
+    prometheus:
+      export_addr:
+        ip: "0.0.0.0"
+        port: 9091
+
+gateway:
+  type: NodePort
+  http:
+    enabled: true
+    servicePort: 9080
+    containerPort: 9080
+  tls:
+    enabled: false
+
+admin:
+  enabled: true
+  type: ClusterIP
+  port: 9180
+  credentials:
+    admin: dev-admin-key
+  allow:
+    ipList:
+      - 0.0.0.0/0
+
+etcd:
+  enabled: true
+  replicaCount: 1
+  persistence:
+    size: 1Gi
+
+# No ingress controller mode — we use traditional mode
+ingress-controller:
+  enabled: false
+
+# Prometheus metrics
+serviceMonitor:
+  enabled: false
+
+# Keep resources light for dev
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi

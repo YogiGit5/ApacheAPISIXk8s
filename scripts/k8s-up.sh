@@ -2,45 +2,89 @@
 set -euo pipefail
 
 # ──────────────────────────────────────────────────────────
-#  VZone Dev Environment — Docker Compose
-#  Brings up APISIX + etcd + httpbin, then applies routes
-#  with Docker-friendly upstream addresses.
+#  VZone Dev/Demo — Deploy APISIX on Kubernetes
+#  Deploys: etcd + APISIX (Helm) + httpbin (mock backend)
+#  Then applies routes via Admin API
 # ──────────────────────────────────────────────────────────
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
-INFRA_DIR="$PROJECT_ROOT/apisix-infra"
+K8S_DIR="$PROJECT_ROOT/k8s"
 
-ADMIN_URL="${APISIX_ADMIN_URL:-http://localhost:9180/apisix/admin}"
-API_KEY="${APISIX_ADMIN_KEY:-dev-admin-key}"
-GATEWAY_URL="${APISIX_GATEWAY_URL:-http://localhost:9080}"
+NAMESPACE="apisix"
+RELEASE_NAME="apisix"
+API_KEY="dev-admin-key"
 
-# In Docker Compose, httpbin container is "apisix-backend" on port 80
-DEV_BACKEND="apisix-backend:80"
+# Backend inside K8s — httpbin service DNS
+K8S_BACKEND="httpbin.apisix.svc.cluster.local:80"
 
 echo "============================================"
-echo "  VZone Dev Environment Setup"
+echo "  VZone — K8s APISIX Setup"
 echo "============================================"
 echo ""
 
-# ── 1. Start containers ──
-echo "==> Starting Docker Compose..."
-cd "$PROJECT_ROOT"
-docker compose up -d
+# ── 1. Add Helm repos ──
+echo "==> Step 1: Adding Helm repos..."
+helm repo add apisix https://charts.apiseven.com 2>/dev/null || true
+helm repo add bitnami https://charts.bitnami.com/bitnami 2>/dev/null || true
+helm repo update
 echo ""
 
-# ── 2. Wait for Admin API ──
-echo "==> Waiting for APISIX Admin API..."
-for i in $(seq 1 30); do
+# ── 2. Create namespace ──
+echo "==> Step 2: Creating namespace '$NAMESPACE'..."
+kubectl create namespace "$NAMESPACE" 2>/dev/null || echo "    Namespace already exists."
+echo ""
+
+# ── 3. Install APISIX via Helm (includes etcd) ──
+echo "==> Step 3: Installing APISIX via Helm..."
+helm upgrade --install "$RELEASE_NAME" apisix/apisix \
+  --namespace "$NAMESPACE" \
+  -f "$K8S_DIR/values.yaml" \
+  --wait \
+  --timeout 5m
+echo ""
+
+# ── 4. Deploy httpbin mock backend ──
+echo "==> Step 4: Deploying httpbin mock backend..."
+kubectl apply -f "$K8S_DIR/httpbin.yaml"
+echo ""
+
+# ── 5. Wait for all pods to be ready ──
+echo "==> Step 5: Waiting for pods to be ready..."
+kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=apisix \
+  -n "$NAMESPACE" --timeout=120s 2>/dev/null || true
+kubectl wait --for=condition=ready pod -l app=httpbin \
+  -n "$NAMESPACE" --timeout=60s 2>/dev/null || true
+
+echo ""
+echo "    Pod status:"
+kubectl get pods -n "$NAMESPACE" --no-headers | while read -r line; do
+  echo "      $line"
+done
+echo ""
+
+# ── 6. Port-forward Admin API (background) ──
+echo "==> Step 6: Starting port-forward to Admin API..."
+# Kill any existing port-forward
+pkill -f "kubectl port-forward.*9180:9180" 2>/dev/null || true
+sleep 1
+kubectl port-forward svc/${RELEASE_NAME}-admin -n "$NAMESPACE" 9180:9180 &>/dev/null &
+PF_PID=$!
+echo "    Port-forward PID: $PF_PID (localhost:9180 → Admin API)"
+
+# Wait for port-forward to be ready
+ADMIN_URL="http://localhost:9180/apisix/admin"
+echo "    Waiting for Admin API on localhost:9180..."
+for i in $(seq 1 20); do
   code=$(curl -s -o /dev/null -w "%{http_code}" "$ADMIN_URL/routes" \
     -H "X-API-KEY: $API_KEY" 2>/dev/null || echo "000")
   if [ "$code" = "200" ]; then
     echo "    Admin API is ready."
     break
   fi
-  if [ "$i" -eq 30 ]; then
-    echo "ERROR: Admin API not reachable after 60s." >&2
-    echo "       Check: docker compose logs apisix" >&2
+  if [ "$i" -eq 20 ]; then
+    echo "ERROR: Admin API not reachable. Check pods and port-forward." >&2
+    echo "       kubectl logs -l app.kubernetes.io/name=apisix -n $NAMESPACE" >&2
     exit 1
   fi
   sleep 2
@@ -67,8 +111,8 @@ api_put() {
 
 ERRORS=0
 
-# ── 3. Apply global rules ──
-echo "==> Applying global rules..."
+# ── 7. Apply global rules ──
+echo "==> Step 7: Applying global rules..."
 api_put "/global_rules/1" "CORS" '{
   "plugins": {
     "cors": {
@@ -93,46 +137,46 @@ api_put "/global_rules/2" "Request ID" '{
 }' || ERRORS=$((ERRORS + 1))
 echo ""
 
-# ── 4. Apply upstreams (pointing to Docker httpbin backend) ──
-echo "==> Applying upstreams (dev: $DEV_BACKEND)..."
-api_put "/upstreams/1" "live-tracking (dev)" "{
+# ── 8. Apply upstreams (pointing to httpbin inside K8s) ──
+echo "==> Step 8: Applying upstreams (→ $K8S_BACKEND)..."
+api_put "/upstreams/1" "live-tracking" "{
   \"name\": \"live-tracking-upstream\",
-  \"desc\": \"Live Tracking Service - dev (httpbin)\",
+  \"desc\": \"Live Tracking Service (httpbin mock)\",
   \"type\": \"roundrobin\",
-  \"nodes\": {\"$DEV_BACKEND\": 1},
+  \"nodes\": {\"$K8S_BACKEND\": 1},
   \"retries\": 2,
   \"timeout\": {\"connect\": 5, \"send\": 5, \"read\": 10},
   \"scheme\": \"http\"
 }" || ERRORS=$((ERRORS + 1))
 
-api_put "/upstreams/4" "notification (dev)" "{
+api_put "/upstreams/4" "notification" "{
   \"name\": \"notification-upstream\",
-  \"desc\": \"Notification Service - dev (httpbin)\",
+  \"desc\": \"Notification Service (httpbin mock)\",
   \"type\": \"roundrobin\",
-  \"nodes\": {\"$DEV_BACKEND\": 1},
+  \"nodes\": {\"$K8S_BACKEND\": 1},
   \"retries\": 2,
   \"timeout\": {\"connect\": 5, \"send\": 5, \"read\": 10},
   \"scheme\": \"http\"
 }" || ERRORS=$((ERRORS + 1))
 
-api_put "/upstreams/5" "live-tracking-ws (dev)" "{
+api_put "/upstreams/5" "live-tracking-ws" "{
   \"name\": \"live-tracking-ws-upstream\",
-  \"desc\": \"Live Tracking WS - dev (httpbin)\",
+  \"desc\": \"Live Tracking WS (httpbin mock)\",
   \"type\": \"chash\",
   \"hash_on\": \"vars\",
   \"key\": \"remote_addr\",
-  \"nodes\": {\"$DEV_BACKEND\": 1},
+  \"nodes\": {\"$K8S_BACKEND\": 1},
   \"retries\": 2,
   \"timeout\": {\"connect\": 5, \"send\": 60, \"read\": 60},
   \"scheme\": \"http\"
 }" || ERRORS=$((ERRORS + 1))
 echo ""
 
-# ── 5. Apply routes (no auth — jwt-auth removed) ──
-echo "==> Applying routes..."
+# ── 9. Apply routes (no auth) ──
+echo "==> Step 9: Applying routes..."
 api_put "/routes/100" "tracking-read" '{
   "name": "tracking-read-routes",
-  "desc": "Live Tracking - READ (dev)",
+  "desc": "Live Tracking - READ",
   "uri": "/api/v1/tracking/*",
   "methods": ["GET"],
   "upstream_id": "1",
@@ -153,7 +197,7 @@ api_put "/routes/100" "tracking-read" '{
 
 api_put "/routes/102" "tracking-write" '{
   "name": "tracking-write-routes",
-  "desc": "Live Tracking - WRITE (dev)",
+  "desc": "Live Tracking - WRITE",
   "uri": "/api/v1/tracking/*",
   "methods": ["POST", "PUT", "PATCH", "DELETE"],
   "upstream_id": "1",
@@ -174,7 +218,7 @@ api_put "/routes/102" "tracking-write" '{
 
 api_put "/routes/400" "notification-read" '{
   "name": "notification-read-routes",
-  "desc": "Notification - READ (dev)",
+  "desc": "Notification - READ",
   "uri": "/api/v1/notifications/*",
   "methods": ["GET"],
   "upstream_id": "4",
@@ -195,7 +239,7 @@ api_put "/routes/400" "notification-read" '{
 
 api_put "/routes/401" "notification-write" '{
   "name": "notification-write-routes",
-  "desc": "Notification - WRITE (dev)",
+  "desc": "Notification - WRITE",
   "uri": "/api/v1/notifications/*",
   "methods": ["POST", "PUT", "PATCH", "DELETE"],
   "upstream_id": "4",
@@ -216,7 +260,7 @@ api_put "/routes/401" "notification-write" '{
 
 api_put "/routes/101" "websocket" '{
   "name": "tracking-websocket-route",
-  "desc": "Live Tracking - WebSocket (dev)",
+  "desc": "Live Tracking - WebSocket",
   "uri": "/ws/tracking",
   "enable_websocket": true,
   "upstream_id": "5",
@@ -235,14 +279,25 @@ api_put "/routes/101" "websocket" '{
 }' || ERRORS=$((ERRORS + 1))
 echo ""
 
-# ── 6. Verify ──
-echo "==> Quick health check..."
+# ── 10. Port-forward Gateway too ──
+echo "==> Step 10: Port-forwarding Gateway..."
+pkill -f "kubectl port-forward.*9080:9080" 2>/dev/null || true
+sleep 1
+kubectl port-forward svc/${RELEASE_NAME}-gateway -n "$NAMESPACE" 9080:9080 &>/dev/null &
+GW_PID=$!
+sleep 2
+echo "    Gateway port-forward PID: $GW_PID (localhost:9080)"
+echo ""
+
+# ── 11. Verify ──
+echo "==> Step 11: Quick health check..."
+GATEWAY_URL="http://localhost:9080"
 gw_code=$(curl -s -o /dev/null -w "%{http_code}" "$GATEWAY_URL/" 2>/dev/null || echo "000")
 tracking_code=$(curl -s -o /dev/null -w "%{http_code}" "$GATEWAY_URL/api/v1/tracking/test" 2>/dev/null || echo "000")
 notif_code=$(curl -s -o /dev/null -w "%{http_code}" "$GATEWAY_URL/api/v1/notifications/test" 2>/dev/null || echo "000")
-echo "    Gateway root:        HTTP $gw_code"
-echo "    /api/v1/tracking/*:  HTTP $tracking_code"
-echo "    /api/v1/notifications/*: HTTP $notif_code"
+echo "    Gateway root:              HTTP $gw_code"
+echo "    /api/v1/tracking/*:        HTTP $tracking_code"
+echo "    /api/v1/notifications/*:   HTTP $notif_code"
 echo ""
 
 echo "============================================"
@@ -250,16 +305,21 @@ if [ "$ERRORS" -gt 0 ]; then
   echo "  Setup completed with $ERRORS error(s)"
   exit 1
 else
-  echo "  Dev environment is READY"
+  echo "  K8s environment is READY"
   echo ""
-  echo "  Gateway:     http://localhost:9080"
-  echo "  Admin API:   http://localhost:9180"
-  echo "  Prometheus:  http://localhost:9091"
+  echo "  Gateway:     http://localhost:9080  (port-forwarded)"
+  echo "  Admin API:   http://localhost:9180  (port-forwarded)"
   echo ""
   echo "  Test it:"
   echo "    curl http://localhost:9080/api/v1/tracking/vehicles"
   echo "    curl http://localhost:9080/api/v1/notifications/list"
   echo ""
-  echo "  Auth: DISABLED (will use Keycloak later)"
+  echo "  View pods:"
+  echo "    kubectl get pods -n $NAMESPACE"
+  echo ""
+  echo "  View logs:"
+  echo "    kubectl logs -l app.kubernetes.io/name=apisix -n $NAMESPACE"
+  echo ""
+  echo "  Auth: DISABLED (Keycloak OIDC planned)"
 fi
 echo "============================================"

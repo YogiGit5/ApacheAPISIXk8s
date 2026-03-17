@@ -1,7 +1,0 @@
-_meta:
-  resource: global_rules
-  id: "4"
-
-plugins:
-  prometheus:
-    prefer_name: true
