@@ -1,0 +1,43 @@
+_meta:
+  resource: upstreams
+  id: "1"
+
+name: live-tracking-upstream
+desc: "Live Tracking Service - Go (REST only, roundrobin)"
+type: roundrobin
+nodes:
+  "live-tracking-service.vzone.svc.cluster.local:8080": 1
+retries: 2
+retry_timeout: 5
+timeout:
+  connect: 5
+  send: 5
+  read: 10
+scheme: http
+checks:
+  active:
+    type: http
+    http_path: /healthz
+    healthy:
+      interval: 5
+      successes: 2
+    unhealthy:
+      interval: 5
+      http_failures: 3
+      tcp_failures: 3
+      timeouts: 3
+  passive:
+    healthy:
+      http_statuses:
+        - 200
+        - 201
+        - 204
+      successes: 3
+    unhealthy:
+      http_statuses:
+        - 500
+        - 502
+        - 503
+      http_failures: 3
+      tcp_failures: 3
+      timeouts: 3

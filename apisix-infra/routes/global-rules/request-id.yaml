@@ -1,0 +1,9 @@
+_meta:
+  resource: global_rules
+  id: "2"
+
+plugins:
+  request-id:
+    header_name: "X-Request-ID"
+    include_in_response: true
+    algorithm: "uuid"

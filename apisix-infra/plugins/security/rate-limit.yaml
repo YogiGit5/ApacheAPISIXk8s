@@ -1,0 +1,41 @@
+# ──────────────────────────────────────────────────────────
+#  Rate Limiting Configuration Reference
+#  Applied directly in route YAML files via limit-count plugin
+# ──────────────────────────────────────────────────────────
+#
+#  Policy:
+#    - READ  routes (GET):                    100 req/min per IP
+#    - WRITE routes (POST/PUT/PATCH/DELETE):   20 req/min per IP
+#    - WebSocket (limit-conn):                 50 concurrent connections per IP
+#
+#  Plugin: limit-count (request-based)
+#    count:          Max requests in the time window
+#    time_window:    Window in seconds (60 = per minute)
+#    key_type:       var (NGINX variable)
+#    key:            remote_addr (rate limit per client IP)
+#    rejected_code:  429 (Too Many Requests)
+#    policy:         local (per-node) or redis (shared across nodes)
+#    group:          Shared counter group name
+#
+#  Plugin: limit-conn (connection-based, WebSocket)
+#    conn:           Max concurrent connections
+#    burst:          Extra allowed connections (queued)
+#    default_conn_delay: Seconds to wait before rejecting burst
+#    key:            remote_addr
+#
+#  Production note:
+#    For multi-replica APISIX, switch policy from "local" to "redis"
+#    and configure redis_host/redis_port to share counters across nodes.
+#
+#  Redis-backed rate limiting (prod):
+#    limit-count:
+#      count: 100
+#      time_window: 60
+#      key_type: var
+#      key: remote_addr
+#      rejected_code: 429
+#      policy: redis
+#      redis_host: "valkey.vzone.svc.cluster.local"
+#      redis_port: 6379
+#      redis_database: 1
+#      redis_timeout: 1000

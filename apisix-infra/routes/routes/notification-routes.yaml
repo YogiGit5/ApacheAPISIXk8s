@@ -1,0 +1,26 @@
+_meta:
+  resource: routes
+  id: "400"
+
+name: notification-read-routes
+desc: "Notification Service - READ endpoints (100 req/min per IP)"
+uri: /api/v1/notifications/*
+methods:
+  - GET
+upstream_id: "4"
+plugins:
+  # auth disabled – will be replaced by Keycloak OIDC validation
+  limit-count:
+    count: 100
+    time_window: 60
+    key_type: var
+    key: remote_addr
+    rejected_code: 429
+    rejected_msg: '{"error": "Rate limit exceeded", "retry_after": 60}'
+    policy: local
+    group: notification-read
+  proxy-rewrite:
+    regex_uri:
+      - "^/api/v1/notifications/(.*)"
+      - "/api/v1/notifications/$1"
+status: 1

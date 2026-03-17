@@ -1,0 +1,85 @@
+apisix:
+  image:
+    repository: apache/apisix
+    tag: 3.9.1-debian
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  timezone: "UTC"
+  enableIPv6: false
+
+gateway:
+  type: NodePort
+  http:
+    enabled: true
+    servicePort: 9080
+    containerPort: 9080
+    nodePort: 30080
+  tls:
+    enabled: true
+    servicePort: 9443
+    containerPort: 9443
+    nodePort: 30443
+
+admin:
+  enabled: true
+  type: NodePort
+  servicePort: 9180
+  nodePort: 30180
+  credentials:
+    admin: "dev-admin-key"
+    viewer: "dev-viewer-key"
+  allow:
+    ipList:
+      - 0.0.0.0/0
+
+etcd:
+  enabled: false
+  host:
+    - "http://apisix-etcd.apisix.svc.cluster.local:2379"
+  prefix: "/apisix"
+  timeout: 30
+
+plugins:
+  - proxy-rewrite
+  - redirect
+  - cors
+  - request-id
+  - prometheus
+  - ip-restriction
+  - limit-req
+  - limit-count
+  - limit-conn
+  - jwt-auth
+  - key-auth
+  - consumer-restriction
+  - real-ip
+  - http-logger
+  - syslog
+  - serverless-pre-function
+
+pluginAttrs:
+  prometheus:
+    export_addr:
+      ip: "0.0.0.0"
+      port: 9091
+
+serviceMonitor:
+  enabled: false
+
+customPlugins:
+  enabled: false
+
+configurationSnippet:
+  main: |
+    # Enable WebSocket support
+  httpStart: |
+  httpEnd: |
+  httpSrv: |
+  httpAdmin: |
+  stream: |

@@ -1,0 +1,7 @@
+_meta:
+  resource: global_rules
+  id: "3"
+
+plugins:
+  redirect:
+    http_to_https: true

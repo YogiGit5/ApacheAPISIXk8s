@@ -1,0 +1,20 @@
+# Environment & secrets
+.env
+.env.*
+*.pem
+*.key
+*.crt
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+etcd-data/
+
+# IDE
+.vscode/
+.idea/
+
+# Claude Code local state
+.claude/
