@@ -47,7 +47,7 @@ etcd:
   enabled: true
   replicaCount: 1
   persistence:
-    size: 1Gi
+    enabled: false          # uses emptyDir — fine for dev/demo
 
 # No ingress controller mode — we use traditional mode
 ingress-controller:

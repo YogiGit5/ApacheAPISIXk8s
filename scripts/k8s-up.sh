@@ -41,7 +41,7 @@ helm upgrade --install "$RELEASE_NAME" apisix/apisix \
   --namespace "$NAMESPACE" \
   -f "$K8S_DIR/values.yaml" \
   --wait \
-  --timeout 5m
+  --timeout 10m
 echo ""
 
 # ── 4. Deploy httpbin mock backend ──
