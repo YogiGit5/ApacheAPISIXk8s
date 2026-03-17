@@ -13,7 +13,7 @@ K8S_DIR="$PROJECT_ROOT/k8s"
 
 NAMESPACE="apisix"
 RELEASE_NAME="apisix"
-API_KEY="dev-admin-key"
+API_KEY="${APISIX_ADMIN_KEY:-edd1c9f034335f136f87ad84b625c8f1}"
 
 # Backend inside K8s — httpbin service DNS
 K8S_BACKEND="httpbin.apisix.svc.cluster.local:80"
@@ -63,31 +63,37 @@ kubectl get pods -n "$NAMESPACE" --no-headers | while read -r line; do
 done
 echo ""
 
-# ── 6. Port-forward Admin API (background) ──
-echo "==> Step 6: Starting port-forward to Admin API..."
-# Kill any existing port-forward
+# ── 6. Wait for APISIX pod to be fully ready ──
+echo "==> Step 6: Waiting for APISIX pod to be ready..."
+kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=apisix \
+  -n "$NAMESPACE" --timeout=180s
+echo "    APISIX pod is ready."
+echo ""
+
+# ── 7. Port-forward Admin API (background) ──
+echo "==> Step 7: Starting port-forward to Admin API..."
 pkill -f "kubectl port-forward.*9180:9180" 2>/dev/null || true
 sleep 1
 kubectl port-forward svc/${RELEASE_NAME}-admin -n "$NAMESPACE" 9180:9180 &>/dev/null &
 PF_PID=$!
 echo "    Port-forward PID: $PF_PID (localhost:9180 → Admin API)"
 
-# Wait for port-forward to be ready
 ADMIN_URL="http://localhost:9180/apisix/admin"
 echo "    Waiting for Admin API on localhost:9180..."
-for i in $(seq 1 20); do
+for i in $(seq 1 30); do
   code=$(curl -s -o /dev/null -w "%{http_code}" "$ADMIN_URL/routes" \
     -H "X-API-KEY: $API_KEY" 2>/dev/null || echo "000")
   if [ "$code" = "200" ]; then
     echo "    Admin API is ready."
     break
   fi
-  if [ "$i" -eq 20 ]; then
+  if [ "$i" -eq 30 ]; then
     echo "ERROR: Admin API not reachable. Check pods and port-forward." >&2
+    echo "       kubectl get pods -n $NAMESPACE" >&2
     echo "       kubectl logs -l app.kubernetes.io/name=apisix -n $NAMESPACE" >&2
     exit 1
   fi
-  sleep 2
+  sleep 3
 done
 echo ""
 
@@ -111,8 +117,8 @@ api_put() {
 
 ERRORS=0
 
-# ── 7. Apply global rules ──
-echo "==> Step 7: Applying global rules..."
+# ── 8. Apply global rules ──
+echo "==> Step 8: Applying global rules..."
 api_put "/global_rules/1" "CORS" '{
   "plugins": {
     "cors": {
@@ -137,8 +143,8 @@ api_put "/global_rules/2" "Request ID" '{
 }' || ERRORS=$((ERRORS + 1))
 echo ""
 
-# ── 8. Apply upstreams (pointing to httpbin inside K8s) ──
-echo "==> Step 8: Applying upstreams (→ $K8S_BACKEND)..."
+# ── 9. Apply upstreams (pointing to httpbin inside K8s) ──
+echo "==> Step 9: Applying upstreams (→ $K8S_BACKEND)..."
 api_put "/upstreams/1" "live-tracking" "{
   \"name\": \"live-tracking-upstream\",
   \"desc\": \"Live Tracking Service (httpbin mock)\",
@@ -172,8 +178,8 @@ api_put "/upstreams/5" "live-tracking-ws" "{
 }" || ERRORS=$((ERRORS + 1))
 echo ""
 
-# ── 9. Apply routes (no auth) ──
-echo "==> Step 9: Applying routes..."
+# ── 10. Apply routes (no auth) ──
+echo "==> Step 10: Applying routes..."
 api_put "/routes/100" "tracking-read" '{
   "name": "tracking-read-routes",
   "desc": "Live Tracking - READ",
@@ -279,18 +285,18 @@ api_put "/routes/101" "websocket" '{
 }' || ERRORS=$((ERRORS + 1))
 echo ""
 
-# ── 10. Port-forward Gateway too ──
-echo "==> Step 10: Port-forwarding Gateway..."
-pkill -f "kubectl port-forward.*9080:9080" 2>/dev/null || true
+# ── 11. Port-forward Gateway ──
+echo "==> Step 11: Port-forwarding Gateway..."
+pkill -f "kubectl port-forward.*9080:80" 2>/dev/null || true
 sleep 1
-kubectl port-forward svc/${RELEASE_NAME}-gateway -n "$NAMESPACE" 9080:9080 &>/dev/null &
+kubectl port-forward svc/${RELEASE_NAME}-gateway -n "$NAMESPACE" 9080:80 &>/dev/null &
 GW_PID=$!
 sleep 2
-echo "    Gateway port-forward PID: $GW_PID (localhost:9080)"
+echo "    Gateway port-forward PID: $GW_PID (localhost:9080 → svc port 80)"
 echo ""
 
-# ── 11. Verify ──
-echo "==> Step 11: Quick health check..."
+# ── 12. Verify ──
+echo "==> Step 12: Quick health check..."
 GATEWAY_URL="http://localhost:9080"
 gw_code=$(curl -s -o /dev/null -w "%{http_code}" "$GATEWAY_URL/" 2>/dev/null || echo "000")
 tracking_code=$(curl -s -o /dev/null -w "%{http_code}" "$GATEWAY_URL/api/v1/tracking/test" 2>/dev/null || echo "000")
@@ -307,7 +313,9 @@ if [ "$ERRORS" -gt 0 ]; then
 else
   echo "  K8s environment is READY"
   echo ""
+  NODE_PORT=$(kubectl get svc ${RELEASE_NAME}-gateway -n "$NAMESPACE" -o jsonpath='{.spec.ports[0].nodePort}')
   echo "  Gateway:     http://localhost:9080  (port-forwarded)"
+  echo "               http://<node-ip>:$NODE_PORT  (NodePort, no port-forward needed)"
   echo "  Admin API:   http://localhost:9180  (port-forwarded)"
   echo ""
   echo "  Test it:"
