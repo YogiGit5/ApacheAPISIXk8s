@@ -13,7 +13,7 @@ K8S_DIR="$PROJECT_ROOT/k8s"
 
 NAMESPACE="apisix"
 RELEASE_NAME="apisix"
-API_KEY="${APISIX_ADMIN_KEY:-edd1c9f034335f136f87ad84b625c8f1}"
+API_KEY="${APISIX_ADMIN_KEY:-vzone-apisix-admin-key-2026}"
 
 # Backend inside K8s — httpbin service DNS
 K8S_BACKEND="httpbin.apisix.svc.cluster.local:80"
@@ -148,7 +148,9 @@ echo "==> Step 9: Applying upstreams (→ $K8S_BACKEND)..."
 api_put "/upstreams/1" "live-tracking" "{
   \"name\": \"live-tracking-upstream\",
   \"desc\": \"Live Tracking Service (httpbin mock)\",
-  \"type\": \"roundrobin\",
+  \"type\": \"chash\",
+  \"hash_on\": \"header\",
+  \"key\": \"Authorization\",
   \"nodes\": {\"$K8S_BACKEND\": 1},
   \"retries\": 2,
   \"timeout\": {\"connect\": 5, \"send\": 5, \"read\": 10},
@@ -158,7 +160,9 @@ api_put "/upstreams/1" "live-tracking" "{
 api_put "/upstreams/4" "notification" "{
   \"name\": \"notification-upstream\",
   \"desc\": \"Notification Service (httpbin mock)\",
-  \"type\": \"roundrobin\",
+  \"type\": \"chash\",
+  \"hash_on\": \"header\",
+  \"key\": \"Authorization\",
   \"nodes\": {\"$K8S_BACKEND\": 1},
   \"retries\": 2,
   \"timeout\": {\"connect\": 5, \"send\": 5, \"read\": 10},
